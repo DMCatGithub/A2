@@ -20,6 +20,7 @@ enum AnimState {IDLE, RUNNING, JUMPING, FALLING};
 
 // Texture spritesheet
 Texture spritesheet;
+Texture sunspritetest;      //TODO Trying sun sprite options to replace earth / match day/night cycle 
 
 // Player
 class Player {
@@ -31,13 +32,23 @@ class Player {
     AnimState state;
 };
 
-int player_max_vel_x;
-int player_min_vel_x;
-int player_min_max_vel_x;
+int player_min_vel_x;       // Trying out gravity also changing horizontal velocity / slow moon walking effect
+int player_max_vel_x;       // Horizontal speed normal gravity
+int player_min_max_vel_x;   // Used to cycle between hi/lo gravity
 
-int player_max_vel_y;
-int player_min_vel_y;
-int player_min_max_vel_y;
+int player_min_vel_y;       // TODO Option for tuning jump height with change of gravity
+int player_max_vel_y;       // Currently only us this value for jump velocity   
+int player_min_max_vel_y;   // Not used
+
+// Audio Files
+AudioClip jumpjet;
+AudioClip weaponshot;
+AudioClip backgroundMusic;
+// std::vector<AudioClip> zombiemoans;
+
+
+
+
 
 // Platform
 class Platform {
@@ -81,11 +92,12 @@ Player player;
 
 // Platforms
 std::vector<Platform> platforms;
+int level_width;                    // Pxiel width of level - used screen scroll and earth/sun elliptical path
 
 // Gravity
 float gravity_time;     // Timer for gravity cycle
 float gravity_period;   // Full cycle of hi>>low>>hi gravity
-float gravity_theta;    // Angle for cosine wave
+float gravity_theta;    // Angle (radians) for cosine/sine wave
 float gravity_phase;    // Phase of gravity (0 to 1)
 float gravity_max;      // Maximum gravity
 float gravity_min;      // Minimum gravity
@@ -94,16 +106,22 @@ float gravity;          // Current gravity
 int gravity_background_colour = 0; // Background colour based on gravity
 
 // Scrolling
-float screen_scroll_offset = 0.0f;
-float screen_center = WINDOW_WIDTH / 2.0f;
-Vec2 screen_pos = Vec2::zero;
+float screen_scroll_offset = 0.0f;              // Value used to keep player center in sidescroll
+float screen_center = WINDOW_WIDTH / 2.0f;      // Target position for player
+Vec2 screen_pos = Vec2::zero;                   // Vector used to modify offset other position vectors
 
 // Starfield
-int star_count;
-struct Star {float x; float y; float size; float star_twinkle_timer;};
-std::vector<Star> stars;
-int level_width;
-float star_off_time;
+int star_count;                     // Number of stars to be added to the sky
+
+struct Star {                       // Simple star struccture
+    float x;                        // Seperated x and y for uniform function
+    float y;                        // 
+    float size;                     // Sets star size (radius)
+    float star_twinkle_timer;};     // Tracks how long has been off for.
+
+float star_off_time;                // How long star is off before turning back on
+std::vector<Star> stars;            //Array for stars
+
 
 //Oxygen
 float oxygen_level;
@@ -120,20 +138,20 @@ Vec2 oxygen_pos;
 Vec2 screen_star_pos;
 
 // Earth
-Texture earth_texture;
-Vec2 earth_size;
+Texture earth_texture;                      // Originally player on the moon and earth in the background / sun potential match day/night cycle.
+Vec2 earth_size;                            // Radius for render
 
-Vec2 earth_pos;
-Vec2 earth_screen_pos = earth_pos;
+Vec2 earth_pos;                             // Global position 
+Vec2 earth_screen_pos = earth_pos;          // Screen position - adjusts when player moves
 
-Vec2 earth_orbit_center = Vec2::zero;
-int earth_orbit_radius_x;
-int earth_orbit_radius_y;
+Vec2 earth_orbit_center = Vec2::zero;       // Elliptical orbit center point - half of orbit below bottom of screen (night)
+int earth_orbit_radius_x;                   // X-axis scaled to width of level
+int earth_orbit_radius_y;                   // Y-axis scaled to fit within height of screen
 
 float earth_time = 0.0f;                    // Timer for gravity cycle
 float earth_period = gravity_period*2;      // Full cycle of hi>>low>>hi gravity
-float earth_theta = 0.0f;
-float earth_phase_shift = 0.0f;              // Phase shift to correct earth orbit position
+float earth_theta = 0.0f;                   // Angle in radians (2*pi = 360 = full cycle)
+float earth_phase_shift = 0.0f;             // Phase shift to correct earth orbit position
 
 // Create platforms of block structures
 void createPlatform(int length, int xStart, int y, std::vector<Block> &blocks, std::vector<std::vector<Tile>> &grid) {
@@ -283,7 +301,9 @@ void init() {
     setWindowTitle("Platformer");
 
     // Load spritesheet
-    spritesheet = loadTexture("./assets/images/spritesheet.png");
+    spritesheet = loadTexture("./assets/images/spritesheet.png"); // Used for planet + 
+    sunspritetest = loadTexture("./assets/images/sun.png"); // Used for sun
+
 
     // Load animations
     animations.push_back(loadAnimation("./assets/images/Idle__", 10, 1.0f, true));
@@ -302,7 +322,7 @@ void init() {
     oxygen_max = 50;
     oxygen_min = 0;
     oxygen_level = 25;
-    oxygen_rate = 1;
+    oxygen_rate = 0; // 0 for testing, increase for more challenge
 
     // Create Player
     player.pos = Vec2(WINDOW_WIDTH/2, WINDOW_HEIGHT/2);
@@ -316,6 +336,16 @@ void init() {
     player_max_vel_y = -300;
     player_min_vel_y = -100;
     player_min_max_vel_y = player_max_vel_y - player_min_vel_y;
+
+    // Load Audio Files 
+    jumpjet = loadAudioClip("./assets/audio/jumpjet/jet7.mp3");
+    // gunreload = loadAudioClip("./assets/audio/reload.wav");
+    backgroundMusic = loadAudioClip("./assets/audio/ambient/bgsound1A.mp3");
+
+
+    // Start background music playing (loop)
+    playAudio(backgroundMusic, 0.5, true);
+
 
     // Create a vector of tiles to act as a grid system for block and tile placement; each cell in the grid is 32x32 pixels
     for (int x = 0; x < 125; x++) {
@@ -342,28 +372,28 @@ void init() {
     createOxygenBlocks();
 
     // Create starfield
-    // level_width = 4000;
-    screen_star_pos = Vec2::zero;
-    star_off_time = 0.2f; // Time for star to be off during twinkle
+    screen_star_pos = Vec2::zero;               // Side scroll offset used on stars
+    star_off_time = 0.2f;                       // Time for star to be off during twinkle
+    star_count = 200;    
 
-    star_count = 200;
     for(int i = 0; i < star_count; i++) {
         Star star;
-        star.x = uniform(0, level_width + WINDOW_WIDTH/2); // Screen scrolls after 1/2 window_width
-        star.y = uniform(0, WINDOW_HEIGHT);
-        star.size = uniform(1, 3);
-        star.star_twinkle_timer = 0; // Randomly set star on or off for twinkling effect
-        stars.push_back(star);
+        star.x = uniform(0, level_width + WINDOW_WIDTH/2);      // starfield slightly larger then level width to allow paralax shift
+        star.y = uniform(0, WINDOW_HEIGHT);                     // starfield fits height of screen (no paralax shift in y)
+        star.size = uniform(1, 3);                              // wanted small stars with some size variation 
+        star.star_twinkle_timer = 0;                            // Stars start at 0 which equals ON
+        stars.push_back(star);                                  // Create star
     }   
 
     // Earth
-    earth_texture = subTexture(spritesheet, 0, 65, 210, 210);
-    earth_size = Vec2(200, 200);
+    earth_texture = subTexture(spritesheet, 0, 65, 210, 210);       // Testing sun vs earth sprites
+    // earth_texture = subTexture(sunspritetest, 0, 0, 500, 500);      // Testing sun vs earth sprites
+    earth_size = Vec2(200, 200);                                    // Sets earth/sun size
 
-    earth_pos = Vec2::zero;
-    earth_screen_pos = earth_pos;
+    earth_pos = Vec2::zero;                     // Earth position vector
+    earth_screen_pos = earth_pos;               // Screen scroll offset for screen movement
 
-    earth_orbit_center = Vec2(level_width/2 - earth_size.x/2, WINDOW_HEIGHT);
+    earth_orbit_center = Vec2(level_width/2 - earth_size.x/2, WINDOW_HEIGHT);   // Position 
     earth_orbit_radius_x = level_width/2 + earth_size.x;
     earth_orbit_radius_y = WINDOW_HEIGHT;
     earth_period = gravity_period * 2;      // gravity_period is light-dark // earth_period is light-dark-light
@@ -371,16 +401,16 @@ void init() {
     earth_time = 0.0f;
     earth_period = gravity_period*2;
     earth_theta = 0.0f;
-    earth_phase_shift = 0.0f;
+    earth_phase_shift = 2* M_PI * 90/360;              // Offset to get movement to match day/night cycle
 
     // Gravity
-    gravity_time = 0.0f;          // Timer for gravity cycle
-    gravity_period = 20.0f;      // Full cycle of hi>>low>>hi gravity
-    gravity_theta = 0.0f;    // Angle for cosine wave
-    gravity_phase = 0.0f;                    // Phase of gravity (0 to 1)
-    gravity_max = 981;            // Maximum gravity
-    gravity_min = 160;            // Minimum gravity
-    gravity = 0.0f; // Current gravity
+    gravity_time = 0.0f;            // Timer for gravity cycle
+    gravity_period = 20.0f;         // Full cycle of hi>>low>>hi gravity
+    gravity_theta = 0.0f;           // Angle for cosine wave
+    gravity_phase = 0.0f;           // Phase of gravity (0 to 1)
+    gravity_max = 981;              // Maximum gravity
+    gravity_min = 160;              // Minimum gravity
+    gravity = 0.0f;                 // Current gravity
 
     gravity_background_colour = 0; // Background colour based on gravity
 }
@@ -389,25 +419,26 @@ void init() {
 void update(float dt) {
 
     // Gravity
-    gravity_time += dt;         // Timer for gravity cycle
+    gravity_time += dt;                                 // Timer for gravity cycle
     if (gravity_time > 2 * gravity_period) {
-        gravity_time = 0;       // Reset Timer
+        gravity_time = 0;                               // Reset Timer
     }
-    gravity_theta = (2.0f * M_PI * gravity_time) / gravity_period;    // Angle for cosine wave
-    gravity_phase = (cosf(gravity_theta) + 1) / 2;                    // Phase of gravity (0 to 1)
-    gravity = gravity_min + gravity_phase * (gravity_max - gravity_min); // Current gravity
-    gravity_background_colour = (int)(255.0f * (gravity_phase)); // Background colour based on gravity
+    gravity_theta = (2.0f * M_PI / gravity_period) * gravity_time;          // Angle for cosine wave
+    gravity_phase = (cosf(gravity_theta) + 1) / 2;                          // Phase of gravity (0 to 1)
+    gravity = gravity_min + gravity_phase * (gravity_max - gravity_min);    // Current gravity
+    gravity_background_colour = (int)(255.0f * (gravity_phase));            // Background colour based on gravity
  
     player.vel.x = 0;
 
     // Scrolling
     screen_scroll_offset = player.pos.x - screen_center;
+
     if (screen_scroll_offset < 0) {
-        screen_scroll_offset = 0; // Prevent walking past the left edge
+        screen_scroll_offset = 0;                               // Prevent walking past the left edge
     }
     
     if (screen_scroll_offset > level_width - WINDOW_WIDTH) {
-        screen_scroll_offset = level_width - WINDOW_WIDTH; // Prevent walking past the right edge
+        screen_scroll_offset = level_width - WINDOW_WIDTH;      // Prevent walking past the right edge
     }
 
     // Starfield /// WORK ON THIS
@@ -429,7 +460,7 @@ void update(float dt) {
     // Earth ellipctical orbit
     earth_time = gravity_time;         // Timer for earth orbit
     earth_theta = (2.0f * M_PI * earth_time) / gravity_period;    // Angle for cosine wave
-    earth_phase_shift = 2* M_PI * 90/360;              // Phase shift to start at top of screen
+   
 
     earth_pos.x = earth_orbit_center.x + cosf(earth_theta + earth_phase_shift) * earth_orbit_radius_x;
     earth_pos.y = earth_orbit_center.y - sinf(earth_theta + earth_phase_shift) * earth_orbit_radius_y;
@@ -451,6 +482,11 @@ void update(float dt) {
     // Jump
     if(keyPressedThisFrame(KEY_SPACE) && player.isStanding) {
         // player.vel.y = -750; // Initial setting
+
+
+        // Play jumpjet sound
+        playOnce(jumpjet, 1.0f);
+
         player.vel.y = player_max_vel_y;
 
         player.state = JUMPING;
@@ -544,12 +580,12 @@ void render(float lag) {
     clear(gravity_background_colour,gravity_background_colour,gravity_background_colour);
 
     // Scrolling screen
-    Vec2 screen_pos = player.pos;
-    screen_pos.x -= screen_scroll_offset;
+    Vec2 screen_pos = player.pos;               // New vector with players position
+    screen_pos.x -= screen_scroll_offset;       // Offset players x position in new vector / shift to keep player in the center of screen
 
     // Draw starfield
     for(int i = 0; i < star_count; i++) {
-        Vec2 star_pos = Vec2(stars[i].x, stars[i].y);
+        Vec2 star_pos = Vec2(stars[i].x, stars[i].y); 
         // star_pos.x -= screen_scroll_offset * (stars[i].x / level_width); // Stretching starfield 
         
         screen_star_pos = star_pos;
