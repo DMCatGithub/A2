@@ -47,6 +47,65 @@ AudioClip backgroundMusic;
 // std::vector<AudioClip> zombiemoans;
 
 
+// Laser
+Vec2 laserPos, laserVel;
+float laserAngle;
+bool laserActive;
+Texture laserTexture;
+Vec2 laserSize, laserHitBoxSize;
+Vec2 laser_screen_pos;          // Screen position - adjusts when player moves
+float laserCoolDown;
+float laserTimer;
+
+// Collision (Point-Axis Aligned Bounding Box)
+bool collision(Vec2 pos0, Vec2 pos1, Vec2 size1) {
+    return (pos0.x < pos1.x + size1.x) &&
+            (pos1.x < pos0.x) &&
+            (pos0.y < pos1.y + size1.y) &&
+            (pos1.y < pos0.y);
+}
+
+// Collision (Circle-Axis Aligned Bounding Box)
+bool collision(Vec2 pos0, float radius0, Vec2 pos1, Vec2 size1) {
+    float tx, ty;
+
+    // Check if circle is inside the rectangle
+    if(collision(pos0, pos1, size1)) {
+        return true;
+    }
+
+    // Find point on Rectangle closest to Circle (x)
+    if(pos0.x < pos1.x) {
+        tx = pos1.x; // Left Side
+    } else if(pos0.x > pos1.x + size1.x) {
+        tx = pos1.x + size1.x; // Right Side
+    } else {
+        tx = pos0.x; // Circle position
+    }
+
+    // Find point on Rectangle closest to Circle (y)
+    if(pos0.y < pos1.y) {
+        ty = pos1.y; // Top Side
+    } else if(pos0.y > pos1.y + size1.y) {
+        ty = pos1.y + size1.y; // Bottom Side
+    } else {
+        ty = pos0.y; // Circle position
+    }
+
+    // Compare distance between circle centre and closest point to radius
+    if(distance(Vec2(tx, ty), pos0) < radius0) {
+        return true;
+    }
+    return false;
+}
+
+bool collision(Vec2 pos0, float radius0, Vec2 pos1, Vec2 size1, float angle1) {
+    Vec2 centre = pos1 + size1/2;
+
+    Vec2 pos0_rotated = centre + rotate(pos0 - centre, - angle1);
+    return collision(pos0_rotated, radius0, pos1, size1);
+}
+
 
 
 
@@ -108,7 +167,11 @@ int gravity_background_colour = 0; // Background colour based on gravity
 // Scrolling
 float screen_scroll_offset = 0.0f;              // Value used to keep player center in sidescroll
 float screen_center = WINDOW_WIDTH / 2.0f;      // Target position for player
-Vec2 screen_pos = Vec2::zero;                   // Vector used to modify offset other position vectors
+Vec2 screen_pos;                                // Vector used to modify offset other position vectors
+float leftEdge;
+float rightEdge;
+
+
 
 // Starfield
 int star_count;                     // Number of stars to be added to the sky
@@ -142,7 +205,7 @@ Texture earth_texture;                      // Originally player on the moon and
 Vec2 earth_size;                            // Radius for render
 
 Vec2 earth_pos;                             // Global position 
-Vec2 earth_screen_pos = earth_pos;          // Screen position - adjusts when player moves
+Vec2 earth_screen_pos;          // Screen position - adjusts when player moves
 
 Vec2 earth_orbit_center = Vec2::zero;       // Elliptical orbit center point - half of orbit below bottom of screen (night)
 int earth_orbit_radius_x;                   // X-axis scaled to width of level
@@ -167,6 +230,39 @@ void createOxygenBlocks() {
     blocks.push_back({ grid[20][18].pos, {32, 32}, oxygen_block_tex, false, 1 });
     blocks.push_back({ grid[17][15].pos, {32, 32}, oxygen_block_tex, false, 1 });
 }
+
+
+
+// Asteroid
+Vec2 asteroidPos, asteroidVel;
+float asteroidRadius;
+Vec2 asteroidSize;
+float asteroidAngle;
+float asteroidAngularVelocity;
+
+Texture asteroidTexture;
+
+float asteroidSpawnTimer;
+float asteroidSpawnInterval;
+Vec2 asteroid_screen_pos;
+
+
+Randomly generate a new asteroid
+void randomAsteroid() {
+    asteroidRadius = uniform(16, 64);
+    asteroidSize  = Vec2(asteroidRadius*2, asteroidRadius*2);
+
+    asteroidPos = Vec2(level_width + asteroidSize.x, uniform(0, WINDOW_HEIGHT-200));
+    asteroidVel = Vec2(-(1000-asteroidRadius), uniform(-100, 100));
+
+    asteroidAngle = uniform(0,360);
+    asteroidAngularVelocity =  uniform(-180,180);
+
+}
+
+
+
+
 
 // Check for collisions between player and tile
 void collisions(Player &player, Block &block) {
@@ -337,9 +433,28 @@ void init() {
     player_min_vel_y = -100;
     player_min_max_vel_y = player_max_vel_y - player_min_vel_y;
 
+
+
+    // Laser
+    laserTexture = loadTexture("./assets/spritesheet.png",Vec2(240,0),Vec2(240,240));
+    laserActive = false;
+    laserSize = Vec2(60,60);
+    laserHitBoxSize = Vec2(14,40);
+    laserCoolDown = 0.2f; // Time between shots
+    laserTimer = 0.0f;
+
+    // Asteroid
+    asteroidTexture = loadTexture("./assets/spritesheet.png",Vec2(480,0),Vec2(240,240));
+    asteroidSpawnTimer = 0.0f;
+    asteroidSpawnInterval = uniform(10, 20);
+    randomAsteroid();
+
+
+
+
     // Load Audio Files 
     jumpjet = loadAudioClip("./assets/audio/jumpjet/jet7.mp3");
-    // gunreload = loadAudioClip("./assets/audio/reload.wav");
+    weaponshot = loadAudioClip("./assets/audio/weapon/laser.mp3");
     backgroundMusic = loadAudioClip("./assets/audio/ambient/bgsound1A.mp3");
 
 
@@ -360,8 +475,12 @@ void init() {
     blockTex.push_back(subTexture(spritesheet, 64, 32, 32, 32));
 
 
-    // Create platforms
+    // Level
     level_width = 4000;
+    leftEdge = 0;
+    rightEdge = 0;
+
+    // Create platforms
     createPlatform(50, 0, 22, blocks, grid); // Ground platform
     createPlatform(5, 2, 20, blocks, grid); // Small platforms
     createPlatform(16, 5, 17, blocks, grid);
@@ -432,6 +551,8 @@ void update(float dt) {
 
     // Scrolling
     screen_scroll_offset = player.pos.x - screen_center;
+    leftEdge = screen_scroll_offset;
+    rightEdge = level_width - (screen_scroll_offset + WINDOW_WIDTH);
 
     if (screen_scroll_offset < 0) {
         screen_scroll_offset = 0;                               // Prevent walking past the left edge
@@ -493,6 +614,12 @@ void update(float dt) {
         animations[2].start = getTimeInSeconds();
     }
 
+
+
+
+
+
+
     // Apply gravity
     // player.vel.y += 981 * dt; // Earth Gravity
     player.vel.y += gravity * dt;    // Gravity changes
@@ -504,6 +631,64 @@ void update(float dt) {
     } else if (player.pos.x > level_width - player.size.x / 2) {
         player.pos.x = level_width - player.size.x / 2;
     }
+
+
+
+    // Laser
+    laserTimer -= dt;
+    if(keyPressedThisFrame(KEY_RETURN) && laserTimer <= 0.0f) {
+
+        // If player pressed ENTER and laser cooldown completed
+
+        if (keyIsPressed(KEY_LEFT) || keyIsPressed(KEY_A)) {
+            laserAngle = M_PI; // 180 degrees in radians
+            laserVel = Vec2(-500, 0);
+            laserPos = player.pos + Vec2(-40, 0); 
+        } else {
+            laserAngle = 0; // Default to right if no direction is pressed
+            laserVel = Vec2(500, 0);
+            laserPos = player.pos + Vec2(40, 0); 
+        }
+        laserActive = true;
+        laserTimer = laserCoolDown; // Reset cooldown timer
+        // Play weaponshot sound
+        playOnce(weaponshot, 1.0f);
+    }
+    
+    // If laser is active
+    if(laserActive) {
+        // Move Laser
+        laserPos += laserVel * dt;
+
+        // Laser - Boundary Conditions
+        if(laserPos.x < leftEdge) laserActive = false;  // Deactivate laser if it goes off the left edge of the screen
+        if(laserPos.x > rightEdge) laserActive = false; // Deactivate laser if it goes off the right edge of the screen
+    }
+
+
+
+    // Asteroid
+    asteroidSpawnTimer += dt;
+    if(asteroidSpawnTimer > asteroidSpawnInterval) {
+        randomAsteroid();
+        asteroidSpawnTimer = 0.0f;
+        asteroidSpawnInterval = uniform(1, 5);
+    }
+
+
+
+
+    // Move Asteroid
+    asteroidPos += asteroidVel * dt;
+    asteroidAngle += asteroidAngularVelocity * dt;
+
+    // Collision Detection
+    if(collision(asteroidPos, asteroidRadius*0.9, laserPos - laserHitBoxSize/2, laserHitBoxSize, laserAngle)) {
+        laserActive = false;
+        randomAsteroid();
+    }
+
+
 
     // Clear standing flag
     player.isStanding = false;
@@ -653,6 +838,20 @@ void render(float lag) {
             drawAnimation(animations[3], screen_pos-size/2, size);
         }
     }
+
+
+    // Draw Laser
+    if(laserActive) {
+        laser_screen_pos = laserPos;
+        laser_screen_pos.x -= screen_scroll_offset;
+        drawTexture(laserTexture, laser_screen_pos - laserSize/2, laserSize, laserAngle);
+        // drawRect(laserPos - laserHitBoxSize/2, laserHitBoxSize, Color::red, laserAngle);   //Hitbox
+    }
+
+    // Draw Asteroid
+    asteroid_screen_pos = asteroidPos;
+    asteroid_screen_pos.x -= screen_scroll_offset;
+    drawTexture(asteroidTexture, asteroid_screen_pos - asteroidSize/2, asteroidSize, asteroidAngle);
 
     // Draw Platforms
     //for(int i = 0; i < platforms.size(); i++) {
